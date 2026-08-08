@@ -16,20 +16,38 @@ bool IsDwmCloaked(HWND hwnd) {
         && cloaked != 0;
 }
 
-bool HasOtherMaximizedWindow() {
-    HWND hwnd = GetForegroundWindow();
-    if (!hwnd) return false;
+struct MaximizedWindowSearch {
+    DWORD currentProcessId = 0;
+    bool found = false;
+};
 
-    // Owned dialogs/child windows inherit the state of their root owner.
-    hwnd = GetAncestor(hwnd, GA_ROOTOWNER);
-    if (!hwnd || !IsWindowVisible(hwnd) || IsIconic(hwnd)
-        || IsDwmCloaked(hwnd) || !IsZoomed(hwnd)) {
-        return false;
+BOOL CALLBACK FindMaximizedWindowProc(HWND hwnd, LPARAM lParam) {
+    auto& search = *reinterpret_cast<MaximizedWindowSearch*>(lParam);
+
+    if (!IsWindowVisible(hwnd) || IsIconic(hwnd) || IsDwmCloaked(hwnd)) {
+        return TRUE;
     }
 
     DWORD processId = 0;
     GetWindowThreadProcessId(hwnd, &processId);
-    return processId != GetCurrentProcessId();
+    if (processId == search.currentProcessId) {
+        return TRUE;
+    }
+
+    WINDOWPLACEMENT placement{sizeof(WINDOWPLACEMENT)};
+    if (!GetWindowPlacement(hwnd, &placement)
+        || placement.showCmd != SW_SHOWMAXIMIZED) {
+        return TRUE;
+    }
+
+    search.found = true;
+    return FALSE;
+}
+
+bool HasOtherMaximizedWindow() {
+    MaximizedWindowSearch search{GetCurrentProcessId()};
+    EnumWindows(FindMaximizedWindowProc, reinterpret_cast<LPARAM>(&search));
+    return search.found;
 }
 }
 
