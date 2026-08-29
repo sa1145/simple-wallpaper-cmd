@@ -36,6 +36,12 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # ---------------------------------------------------------------------------
 set(HEADER_FILES
     src/Common.h
+    src/VirtualDesktopInterfaces.h
+    src/VirtualDesktopTracker.h
+    src/WallpaperConfig.h
+    src/MonitorEnumerator.h
+    src/MonitorPipeline.h
+    src/MonitorCoordinator.h
     src/WindowManager.h
     src/DX12Context.h
     src/FrameRingBuffer.h
@@ -46,6 +52,11 @@ set(HEADER_FILES
 )
 
 set(SOURCE_FILES
+    src/VirtualDesktopTracker.cpp
+    src/WallpaperConfig.cpp
+    src/MonitorEnumerator.cpp
+    src/MonitorPipeline.cpp
+    src/MonitorCoordinator.cpp
     src/WindowManager.cpp
     src/DX12Context.cpp
     src/VideoDecoder.cpp
@@ -115,6 +126,33 @@ if(MSVC)
     )
 endif()
 
+add_executable(WallpaperConfigCheck
+    test/WallpaperConfigCheck.cpp
+    src/WallpaperConfig.cpp
+    src/WallpaperConfig.h
+)
+target_include_directories(WallpaperConfigCheck PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(WallpaperConfigCheck PRIVATE
+    WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
+target_link_libraries(WallpaperConfigCheck PRIVATE ole32.lib)
+if(MSVC)
+    target_compile_options(WallpaperConfigCheck PRIVATE /W4 /permissive- /utf-8)
+endif()
+
+add_executable(VirtualDesktopTrackerCheck
+    test/VirtualDesktopTrackerCheck.cpp
+    src/VirtualDesktopTracker.cpp
+    src/VirtualDesktopTracker.h
+    src/VirtualDesktopInterfaces.h
+)
+target_include_directories(VirtualDesktopTrackerCheck PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(VirtualDesktopTrackerCheck PRIVATE
+    WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
+target_link_libraries(VirtualDesktopTrackerCheck PRIVATE ole32.lib advapi32.lib)
+if(MSVC)
+    target_compile_options(VirtualDesktopTrackerCheck PRIVATE /W4 /permissive- /utf-8)
+endif()
+
 # ---------------------------------------------------------------------------
 # Link libraries (per spec)
 #
@@ -128,6 +166,9 @@ endif()
 # dwmapi.lib      — DWM window attributes (cloaked state)
 # ---------------------------------------------------------------------------
 target_link_libraries(${PROJECT_NAME} PRIVATE
+    user32.lib
+    ole32.lib
+    advapi32.lib
     d3d12.lib
     dxgi.lib
     d3dcompiler.lib
@@ -139,12 +180,134 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     dwmapi.lib
 )
 
-add_executable(FrameQueueCheck src/FrameQueueCheck.cpp)
+add_executable(FrameQueueCheck test/FrameQueueCheck.cpp)
 target_include_directories(FrameQueueCheck PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_compile_definitions(FrameQueueCheck PRIVATE
     WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
 if(MSVC)
     target_compile_options(FrameQueueCheck PRIVATE /W4 /permissive- /utf-8)
+endif()
+
+add_executable(MonitorEnumerationCheck
+    test/MonitorEnumerationCheck.cpp
+    src/MonitorEnumerator.cpp
+    src/MonitorEnumerator.h
+)
+target_include_directories(MonitorEnumerationCheck PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(MonitorEnumerationCheck PRIVATE
+    WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
+target_link_libraries(MonitorEnumerationCheck PRIVATE user32.lib)
+if(MSVC)
+    target_compile_options(MonitorEnumerationCheck PRIVATE /W4 /permissive- /utf-8)
+endif()
+
+add_executable(WindowManagerTargetCheck
+    test/WindowManagerTargetCheck.cpp
+    src/WindowManager.cpp
+    src/WindowManager.h
+    src/MonitorEnumerator.cpp
+    src/MonitorEnumerator.h
+)
+target_include_directories(WindowManagerTargetCheck PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(WindowManagerTargetCheck PRIVATE
+    WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
+target_link_libraries(WindowManagerTargetCheck PRIVATE user32.lib)
+if(MSVC)
+    target_compile_options(WindowManagerTargetCheck PRIVATE /W4 /permissive- /utf-8)
+endif()
+
+add_executable(MonitorPipelineCheck
+    test/MonitorPipelineCheck.cpp
+    src/MonitorPipeline.cpp
+    src/MonitorPipeline.h
+    src/MonitorEnumerator.cpp
+    src/MonitorEnumerator.h
+    src/WindowManager.cpp
+    src/WindowManager.h
+    src/DX12Context.cpp
+    src/DX12Context.h
+    src/VideoDecoder.cpp
+    src/VideoDecoder.h
+    src/UploadPipeline.cpp
+    src/UploadPipeline.h
+    src/PresentLoop.cpp
+    src/PresentLoop.h
+    src/FrameRingBuffer.h
+    src/Common.h
+)
+target_include_directories(MonitorPipelineCheck PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(MonitorPipelineCheck PRIVATE
+    WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
+target_link_libraries(MonitorPipelineCheck PRIVATE
+    user32.lib ole32.lib d3d12.lib dxgi.lib d3dcompiler.lib
+    mfplat.lib mfreadwrite.lib mfuuid.lib propsys.lib d3d11.lib)
+if(MSVC)
+    target_compile_options(MonitorPipelineCheck PRIVATE /W4 /permissive- /utf-8)
+endif()
+
+add_executable(MonitorCoordinatorCheck
+    test/MonitorCoordinatorCheck.cpp
+    src/MonitorCoordinator.cpp
+    src/MonitorCoordinator.h
+    src/WallpaperConfig.cpp
+    src/WallpaperConfig.h
+    src/MonitorPipeline.cpp
+    src/MonitorPipeline.h
+    src/MonitorEnumerator.cpp
+    src/MonitorEnumerator.h
+    src/WindowManager.cpp
+    src/WindowManager.h
+    src/DX12Context.cpp
+    src/DX12Context.h
+    src/VideoDecoder.cpp
+    src/VideoDecoder.h
+    src/UploadPipeline.cpp
+    src/UploadPipeline.h
+    src/PresentLoop.cpp
+    src/PresentLoop.h
+    src/FrameRingBuffer.h
+    src/Common.h
+)
+target_include_directories(MonitorCoordinatorCheck PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(MonitorCoordinatorCheck PRIVATE
+    WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
+target_link_libraries(MonitorCoordinatorCheck PRIVATE
+    user32.lib ole32.lib d3d12.lib dxgi.lib d3dcompiler.lib
+    mfplat.lib mfreadwrite.lib mfuuid.lib propsys.lib d3d11.lib)
+if(MSVC)
+    target_compile_options(MonitorCoordinatorCheck PRIVATE /W4 /permissive- /utf-8)
+endif()
+
+add_executable(DesktopHardCutCheck
+    test/DesktopHardCutCheck.cpp
+    src/VirtualDesktopTracker.cpp
+    src/VirtualDesktopTracker.h
+    src/VirtualDesktopInterfaces.h
+    src/MonitorPipeline.cpp
+    src/MonitorPipeline.h
+    src/MonitorEnumerator.cpp
+    src/MonitorEnumerator.h
+    src/WindowManager.cpp
+    src/WindowManager.h
+    src/DX12Context.cpp
+    src/DX12Context.h
+    src/VideoDecoder.cpp
+    src/VideoDecoder.h
+    src/UploadPipeline.cpp
+    src/UploadPipeline.h
+    src/PresentLoop.cpp
+    src/PresentLoop.h
+    src/FrameRingBuffer.h
+    src/Common.h
+)
+target_include_directories(DesktopHardCutCheck PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(DesktopHardCutCheck PRIVATE
+    WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
+target_link_libraries(DesktopHardCutCheck PRIVATE
+    user32.lib ole32.lib advapi32.lib d3d12.lib dxgi.lib d3dcompiler.lib
+    mfplat.lib mfreadwrite.lib mfuuid.lib propsys.lib d3d11.lib)
+if(MSVC)
+    target_compile_options(DesktopHardCutCheck PRIVATE /W4 /permissive- /utf-8)
 endif()
 
 # ---------------------------------------------------------------------------

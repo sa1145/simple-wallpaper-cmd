@@ -32,14 +32,13 @@
 // ============================================================================
 
 #include "Common.h"
-#include "WindowManager.h"
-#include "DX12Context.h"
-#include "FrameRingBuffer.h"
-#include "VideoDecoder.h"
-#include "UploadPipeline.h"
-#include "PresentLoop.h"
+#include "MonitorCoordinator.h"
+#include "VirtualDesktopTracker.h"
+#include "WallpaperConfig.h"
 
 #include <atomic>
+#include <filesystem>
+#include <memory>
 #include <string>
 
 class WallpaperEngine {
@@ -54,6 +53,7 @@ public:
         bool            autoDetectSize  = true;   // 自動偵測螢幕解析度
         uint32_t        windowWidth     = 1920;   // 手動解析度（autoDetect=false 時生效）
         uint32_t        windowHeight    = 1080;
+        std::filesystem::path configPath;
     };
 
     WallpaperEngine()  = default;
@@ -88,37 +88,18 @@ public:
         return m_running.load(std::memory_order_acquire);
     }
 
-    [[nodiscard]] const PresentLoop::Stats GetRenderStats() const noexcept {
-        return m_presentLoop.GetStats();
-    }
+    [[nodiscard]] const PresentLoop::Stats GetRenderStats() const noexcept;
 
 private:
-    // EOS callback — called from DecodeThread, sets flag for main thread
-    void OnEndOfStream();
-
-    // Execute the safe loop seek sequence from the main thread
-    void PerformLoopSeek();
-
-    // Handle display change (resize)
-    void OnDisplayChange(uint32_t newWidth, uint32_t newHeight);
-
-    // -----------------------------------------------------------------------
-    // Modules (owned, initialized in order)
-    // -----------------------------------------------------------------------
-    WindowManager       m_windowManager;
-    DX12Context         m_dx12Context;
-    FrameRingBuffer     m_ringBuffer;
-    VideoDecoder        m_videoDecoder;
-    UploadPipeline      m_uploadPipeline;
-    PresentLoop         m_presentLoop;
+    std::unique_ptr<WallpaperConfig> m_wallpaperConfig;
+    VirtualDesktopTracker m_desktopTracker;
+    MonitorCoordinator  m_coordinator;
 
     // -----------------------------------------------------------------------
     // State
     // -----------------------------------------------------------------------
     std::atomic<bool>   m_running{false};
     std::atomic<bool>   m_stopRequested{false};
-    std::atomic<bool>   m_loopSeekRequested{false};  // set by EOS callback
-
     bool                m_pausedForMaximizedWindow = false;
     bool                m_initialized = false;
 };

@@ -12,6 +12,7 @@ out/
 
 # AI 輔助開發文件（不納入版本控制）
 doc_handoff/
+.handoff/
 
 # 系統雜項
 *.log

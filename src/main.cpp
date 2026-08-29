@@ -10,6 +10,7 @@
 //   --debug            啟用 DX12 Debug Layer
 //   --width <N>        手動指定視窗寬度（停用自動偵測）
 //   --height <N>       手動指定視窗高度（停用自動偵測）
+//   --config <path>    Optional monitor/desktop wallpaper JSON
 //
 // 範例：
 //   WallpaperEngine.exe C:\Videos\wallpaper.mp4
@@ -22,6 +23,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cwchar>
 #include <string>
 #include <windows.h>
 
@@ -39,6 +41,7 @@ static void PrintUsage(const wchar_t* exeName) {
     wprintf(L"  --debug        Enable DX12 debug layer\n");
     wprintf(L"  --width <N>    Manual window width  (disables auto-detect)\n");
     wprintf(L"  --height <N>   Manual window height (disables auto-detect)\n");
+    wprintf(L"  --config <P>   Monitor/desktop wallpaper JSON\n");
     wprintf(L"\nExamples:\n");
     wprintf(L"  %ls C:\\Videos\\wallpaper.mp4\n", exeName);
     wprintf(L"  %ls C:\\Videos\\wallpaper.webm --fps 60 --debug\n", exeName);
@@ -84,6 +87,14 @@ static bool ParseArgs(int argc, wchar_t* argv[], WallpaperEngine::Config& cfg) {
         else if (arg == L"--height" && i + 1 < argc) {
             cfg.windowHeight = static_cast<uint32_t>(_wtoi(argv[++i]));
             manualHeight = true;
+        }
+        else if (arg == L"--config") {
+            if (i + 1 >= argc || std::wcsncmp(argv[i + 1], L"--", 2) == 0) {
+                wprintf(L"[Error] --config requires a path\n");
+                PrintUsage(argv[0]);
+                return false;
+            }
+            cfg.configPath = argv[++i];
         }
         else {
             wprintf(L"[Error] Unknown option: %ls\n", arg.c_str());
