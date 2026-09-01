@@ -76,6 +76,10 @@ bool MonitorCoordinator::Update() {
     CheckOwnerThread();
     if (!m_initialized) return false;
     for (auto& entry : m_entries) {
+        if (!entry.pipeline) {
+            ScheduleDisplayChange();
+            continue;
+        }
         if (!entry.pipeline->PumpMessages()) {
             m_quitRequested = true;
             return false;
@@ -83,8 +87,17 @@ bool MonitorCoordinator::Update() {
     }
     if (m_displayChangePending) {
         m_displayChangePending = false;
-        if (m_config.autoDetectSize && !Reconcile(EnumerateActiveMonitors()))
+        std::vector<MonitorDescriptor> monitors;
+        if (m_config.autoDetectSize) {
+            monitors = EnumerateActiveMonitors();
+        } else {
+            monitors.reserve(m_entries.size());
+            for (const auto& entry : m_entries) monitors.push_back(entry.descriptor);
+        }
+        if (!Reconcile(monitors)) {
             std::printf("[MonitorCoordinator] Display change staging failed\n");
+            m_displayChangePending = true;
+        }
     }
     for (auto& entry : m_entries) if (entry.pipeline) entry.pipeline->Update();
     return !m_quitRequested;
@@ -178,8 +191,28 @@ bool MonitorCoordinator::Reconcile(const std::vector<MonitorDescriptor>& monitor
         if (existing < m_entries.size()) {
             matched[existing] = true;
         }
-        plan.push_back({&descriptor, existing, existing < m_entries.size()
-            && m_entries[existing].pipeline && SameDescriptor(m_entries[existing].descriptor, descriptor)});
+        const bool sameDescriptor = existing < m_entries.size()
+            && SameDescriptor(m_entries[existing].descriptor, descriptor);
+        if (sameDescriptor && m_entries[existing].pipeline
+            && !m_entries[existing].pipeline->IsWindowHealthy()) {
+            try {
+                m_entries[existing].pipeline->Stop();
+                m_entries[existing].pipeline->Shutdown();
+            } catch (const std::exception& error) {
+                std::printf("[MonitorCoordinator] Unhealthy pipeline cleanup failed for %ls: %s\n",
+                            descriptor.devicePath.c_str(), error.what());
+                m_entries[existing].pipeline.reset();
+                return false;
+            } catch (...) {
+                std::printf("[MonitorCoordinator] Unhealthy pipeline cleanup failed for %ls: unknown exception\n",
+                            descriptor.devicePath.c_str());
+                m_entries[existing].pipeline.reset();
+                return false;
+            }
+            m_entries[existing].pipeline.reset();
+        }
+        plan.push_back({&descriptor, existing, sameDescriptor
+            && m_entries[existing].pipeline});
     }
 
     std::vector<Entry> staged;
@@ -201,7 +234,12 @@ bool MonitorCoordinator::Reconcile(const std::vector<MonitorDescriptor>& monitor
             }
             staged.push_back({*step.descriptor, std::move(pipeline)});
         }
+    } catch (const std::exception& error) {
+        std::printf("[MonitorCoordinator] Pipeline staging failed: %s\n", error.what());
+        ShutdownEntries(staged);
+        return false;
     } catch (...) {
+        std::printf("[MonitorCoordinator] Pipeline staging failed: unknown exception\n");
         ShutdownEntries(staged);
         return false;
     }
@@ -228,6 +266,18 @@ const PresentLoop::Stats MonitorCoordinator::GetPrimaryRenderStats() const noexc
     for (const auto& entry : m_entries)
         if (entry.descriptor.primary && entry.pipeline) return entry.pipeline->GetRenderStats();
     return {};
+}
+
+uint64_t MonitorCoordinator::GetPrimaryUploadedFrameCountForCheck() const noexcept {
+    for (const auto& entry : m_entries)
+        if (entry.descriptor.primary && entry.pipeline) return entry.pipeline->GetUploadedFrameCount();
+    return 0;
+}
+
+uint64_t MonitorCoordinator::GetPrimaryHardCutCountForCheck() const noexcept {
+    for (const auto& entry : m_entries)
+        if (entry.descriptor.primary && entry.pipeline) return entry.pipeline->GetHardCutCount();
+    return 0;
 }
 
 HWND MonitorCoordinator::GetPipelineWindowForCheck(const std::wstring& devicePath) const noexcept {

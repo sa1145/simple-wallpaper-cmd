@@ -6,6 +6,7 @@
 
 #include <cassert>
 #include <stdexcept>
+#include <utility>
 
 namespace {
 
@@ -13,28 +14,70 @@ struct DesktopHostSearch {
     RECT desktopRect{};
     DWORD shellProcessId = 0;
     HWND host = nullptr;
-    bool ambiguous = false;
 };
 
 bool IsMatchingWorker(HWND hwnd, const DesktopHostSearch& search) {
     DWORD processId = 0;
-    RECT rect{};
     GetWindowThreadProcessId(hwnd, &processId);
-    return processId == search.shellProcessId
-        && GetWindowRect(hwnd, &rect)
-        && EqualRect(&rect, &search.desktopRect);
+    return processId == search.shellProcessId;
 }
 
 void RecordCandidate(DesktopHostSearch& search, HWND candidate) {
     if (!IsMatchingWorker(candidate, search)) return;
-    if (search.host && search.host != candidate) {
-        search.ambiguous = true;
-        return;
-    }
     search.host = candidate;
 }
 
 } // namespace
+
+HWND WindowManager::FindDesktopHost() noexcept {
+    HWND progman = GetShellWindow();
+    if (!progman) progman = FindWindowW(L"Progman", nullptr);
+    if (!progman) return nullptr;
+
+    DWORD shellPid = 0;
+    GetWindowThreadProcessId(progman, &shellPid);
+
+    // 1. Check if Progman has a direct child WorkerW
+    for (HWND worker = FindWindowExW(progman, nullptr, L"WorkerW", nullptr);
+         worker;
+         worker = FindWindowExW(progman, worker, L"WorkerW", nullptr)) {
+        DWORD pid = 0;
+        GetWindowThreadProcessId(worker, &pid);
+        if (pid == shellPid) {
+            return worker;
+        }
+    }
+
+    // 2. Check top-level WorkerW windows directly behind Progman in Z-order
+    for (HWND worker = FindWindowExW(nullptr, progman, L"WorkerW", nullptr);
+         worker;
+         worker = FindWindowExW(nullptr, worker, L"WorkerW", nullptr)) {
+        DWORD pid = 0;
+        GetWindowThreadProcessId(worker, &pid);
+        if (pid == shellPid) {
+            return worker;
+        }
+    }
+
+    // 3. Fallback: Search top-level WorkerW windows that contain SHELLDLL_DefView
+    HWND fallbackHost = nullptr;
+    EnumWindows([](HWND hwnd, LPARAM lParam) -> BOOL {
+        wchar_t className[256]{};
+        if (GetClassNameW(hwnd, className, 256) && lstrcmpW(className, L"WorkerW") == 0) {
+            HWND defView = FindWindowExW(hwnd, nullptr, L"SHELLDLL_DefView", nullptr);
+            if (defView != nullptr) {
+                HWND targetWorker = FindWindowExW(nullptr, hwnd, L"WorkerW", nullptr);
+                if (targetWorker != nullptr) {
+                    *reinterpret_cast<HWND*>(lParam) = targetWorker;
+                    return FALSE;
+                }
+            }
+        }
+        return TRUE;
+    }, reinterpret_cast<LPARAM>(&fallbackHost));
+
+    return fallbackHost;
+}
 
 // ============================================================================
 // Destructor
@@ -50,9 +93,7 @@ WindowManager::~WindowManager() {
 
 WindowManager::WindowManager(WindowManager&& other) noexcept
     : m_hwnd(other.m_hwnd)
-    , m_hInstance(other.m_hInstance)
-    , m_classAtom(other.m_classAtom)
-    , m_width(other.m_width)
+    , m_desktopHost(other.m_desktopHost)
     , m_height(other.m_height)
     , m_posX(other.m_posX)
     , m_posY(other.m_posY)
@@ -66,6 +107,7 @@ WindowManager::WindowManager(WindowManager&& other) noexcept
         SetWindowLongPtrW(m_hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
     }
     other.m_hwnd      = nullptr;
+    other.m_desktopHost = nullptr;
     other.m_classAtom = 0;
 }
 
@@ -73,6 +115,7 @@ WindowManager& WindowManager::operator=(WindowManager&& other) noexcept {
     if (this != &other) {
         Destroy();
         m_hwnd            = other.m_hwnd;
+        m_desktopHost     = other.m_desktopHost;
         m_hInstance       = other.m_hInstance;
         m_classAtom       = other.m_classAtom;
         m_width           = other.m_width;
@@ -90,6 +133,7 @@ WindowManager& WindowManager::operator=(WindowManager&& other) noexcept {
         }
 
         other.m_hwnd      = nullptr;
+        other.m_desktopHost = nullptr;
         other.m_classAtom = 0;
     }
     return *this;
@@ -202,11 +246,19 @@ void WindowManager::Create(const Config& cfg) {
 // ============================================================================
 
 void WindowManager::Destroy() {
-    if (m_hwnd) {
-        DestroyWindow(m_hwnd);
-        m_hwnd = nullptr;
-    }
+    const HWND hwnd = std::exchange(m_hwnd, nullptr);
+    m_desktopHost = nullptr;
+    if (hwnd && IsWindow(hwnd)) DestroyWindow(hwnd);
     m_classAtom = 0;
+}
+
+bool WindowManager::IsValid() const noexcept {
+    return m_hwnd && IsWindow(m_hwnd) && m_desktopHost && IsWindow(m_desktopHost)
+        && GetParent(m_hwnd) == m_desktopHost;
+}
+
+bool WindowManager::IsAttachedToCurrentDesktopHost() const noexcept {
+    return IsValid() && m_desktopHost == FindDesktopHost();
 }
 
 // ============================================================================
@@ -284,8 +336,14 @@ LRESULT WindowManager::HandleMessage(HWND hwnd, UINT msg,
         return 0;
     }
 
-    case WM_DESTROY:
-        return 0;
+    case WM_NCDESTROY:
+        if (m_hwnd == hwnd) {
+            m_hwnd = nullptr;
+            m_desktopHost = nullptr;
+            if (m_displayChangeCallback) m_displayChangeCallback();
+        }
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+        return DefWindowProcW(hwnd, msg, wp, lp);
 
     default:
         break;
@@ -327,15 +385,10 @@ void WindowManager::DetectPrimaryMonitor(uint32_t& outW, uint32_t& outH,
 void WindowManager::PositionAsBehindDesktop() {
     assert(m_hwnd && "PositionAsBehindDesktop called with null HWND");
 
-    // Per spec:
-    //   SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 1920, 1080,
-    //       SWP_NOACTIVATE | SWP_SHOWWINDOW);
-    //
-    // We use actual detected dimensions rather than hardcoded 1920×1080.
     SetWindowPos(
         m_hwnd,
         HWND_BOTTOM,
-        0, 0, 0, 0,                                    // keep current pos/size
+        0, 0, 0, 0,
         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
     );
 }
@@ -347,45 +400,19 @@ void WindowManager::PositionAsBehindDesktop() {
 void WindowManager::InjectBehindDesktopIcons() {
     assert(m_hwnd && "InjectBehindDesktopIcons called with null HWND");
 
-    HWND progman = FindWindowW(L"Progman", nullptr);
+    HWND progman = GetShellWindow();
+    if (!progman) progman = FindWindowW(L"Progman", nullptr);
     if (!progman) {
         throw std::runtime_error("WindowManager::Create — desktop host not found");
     }
 
     // Force Windows to spawn the WorkerW background window
     DWORD_PTR ignored = 0;
-    if (!SendMessageTimeoutW(
-        progman,
-        0x052C,
-        0,
-        0,
-        SMTO_NORMAL,
-        1000,
-        &ignored
-    )) throw std::runtime_error("WindowManager::Create — Progman did not acknowledge 0x052C");
+    SendMessageTimeoutW(progman, 0x052C, 0x0000000D, 0, SMTO_NORMAL, 1000, &ignored);
+    SendMessageTimeoutW(progman, 0x052C, 0x0000000D, 1, SMTO_NORMAL, 1000, &ignored);
+    SendMessageTimeoutW(progman, 0x052C, 0, 0, SMTO_NORMAL, 1000, &ignored);
 
-    DesktopHostSearch search;
-    if (!GetWindowRect(progman, &search.desktopRect)) {
-        throw std::runtime_error("WindowManager::Create — failed to query desktop bounds");
-    }
-    GetWindowThreadProcessId(progman, &search.shellProcessId);
-
-    // Current Windows shell topology: the full-desktop WorkerW is a direct
-    // child of Progman, alongside SHELLDLL_DefView. Accept it only when the
-    // candidate is unique, belongs to Explorer, and covers the desktop.
-    for (HWND worker = FindWindowExW(progman, nullptr, L"WorkerW", nullptr);
-         worker;
-         worker = FindWindowExW(progman, worker, L"WorkerW", nullptr)) {
-        RecordCandidate(search, worker);
-    }
-
-    // Older topology fallback: DefView is owned by a top-level Progman or
-    // WorkerW and the wallpaper host is a later top-level WorkerW.
-    if (!search.host && !search.ambiguous) {
-        EnumWindows(EnumWindowsProc, reinterpret_cast<LPARAM>(&search));
-    }
-
-    HWND desktopHost = search.ambiguous ? nullptr : search.host;
+    HWND desktopHost = FindDesktopHost();
     if (!desktopHost) {
         throw std::runtime_error("WindowManager::Create — wallpaper host not found");
     }
@@ -396,6 +423,7 @@ void WindowManager::InjectBehindDesktopIcons() {
     if (GetParent(m_hwnd) != desktopHost) {
         throw std::runtime_error("WindowManager::Create — failed to attach wallpaper to desktop");
     }
+    m_desktopHost = desktopHost;
 
     POINT childPos{m_posX, m_posY};
     MapWindowPoints(HWND_DESKTOP, desktopHost, &childPos, 1);
@@ -408,6 +436,7 @@ void WindowManager::InjectBehindDesktopIcons() {
         SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_SHOWWINDOW
     );
 }
+
 // ============================================================================
 // EnumWindowsProc
 // ============================================================================
@@ -436,7 +465,12 @@ BOOL CALLBACK WindowManager::EnumWindowsProc(HWND hwnd, LPARAM lParam) {
         for (HWND target = FindWindowExW(nullptr, hwnd, L"WorkerW", nullptr);
              target;
              target = FindWindowExW(nullptr, target, L"WorkerW", nullptr)) {
-            RecordCandidate(search, target);
+            DWORD pid = 0;
+            GetWindowThreadProcessId(target, &pid);
+            if (pid == search.shellProcessId) {
+                search.host = target;
+                return FALSE;
+            }
         }
     }
     return TRUE;

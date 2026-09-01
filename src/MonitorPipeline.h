@@ -57,6 +57,7 @@ public:
     [[nodiscard]] uint32_t GetRenderHeight() const noexcept;
     [[nodiscard]] RECT GetWindowBounds() const noexcept;
     [[nodiscard]] HWND GetWindowHandle() const noexcept;
+    [[nodiscard]] bool IsWindowHealthy() const noexcept;
 
 private:
     struct Runtime;

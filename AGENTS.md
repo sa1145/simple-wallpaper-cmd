@@ -23,7 +23,7 @@
 - 一般 parser、queue、deterministic descriptor 等非互動 checks 可直接執行；記錄命令、exit code 與關鍵輸出。
 - WorkerW、正式引擎、GPU decoder、虛擬桌面切換與 display hotplug 都屬互動式 runtime；未經使用者當次明確解鎖不得執行。
 - Runtime 解鎖後一次只執行一個 check；結束後確認 HWND、程序、decode/render thread 與 GPU 資源無殘留，再進入下一項。
-- 正式引擎先用 Debug 驗證，runtime 測試影片固定為 `D:\test_cpp_build\test.mp4`，並保留 stdout/stderr 證據。
+- 正式引擎先用 Debug 驗證，並保留 stdout/stderr 證據。
 - 無 Explorer shell 的結果只能記為 `SKIP/INCONCLUSIVE`，不得算 PASS。
 - 目前實機只有一個 `1920x1080` 主螢幕。可用單螢幕與 deterministic descriptors 驗證 reconciliation；雙螢幕、插拔、跨 GPU 實機條件記為 `NOT_RUN_HARDWARE_UNAVAILABLE`，不得推定通過。
 

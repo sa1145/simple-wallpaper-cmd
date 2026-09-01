@@ -80,7 +80,8 @@ public:
     [[nodiscard]] const std::wstring& GetMonitorDevicePath() const noexcept {
         return m_monitorDevicePath;
     }
-    [[nodiscard]] bool      IsValid()   const noexcept { return m_hwnd != nullptr; }
+    [[nodiscard]] bool      IsValid()   const noexcept;
+    [[nodiscard]] bool      IsAttachedToCurrentDesktopHost() const noexcept;
 
     // -----------------------------------------------------------------------
     // Callbacks (optional)
@@ -102,10 +103,12 @@ private:
                               int32_t& outX, int32_t& outY) const;
     void PositionAsBehindDesktop();
     void InjectBehindDesktopIcons();
+    static HWND FindDesktopHost() noexcept;
     static BOOL CALLBACK EnumWindowsProc(HWND hwnd, LPARAM lParam);
 
     // State
     HWND        m_hwnd          = nullptr;
+    HWND        m_desktopHost   = nullptr;
     HINSTANCE   m_hInstance     = nullptr;
     ATOM        m_classAtom     = 0;
     uint32_t    m_width         = 0;

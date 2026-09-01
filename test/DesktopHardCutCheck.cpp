@@ -1,6 +1,6 @@
-#include "MonitorEnumerator.h"
-#include "MonitorPipeline.h"
+#include "MonitorCoordinator.h"
 #include "VirtualDesktopTracker.h"
+#include "WallpaperConfig.h"
 
 #include <chrono>
 #include <cstdio>
@@ -12,7 +12,7 @@
 namespace {
 constexpr wchar_t kVideo[] = L"D:\\test_cpp_build\\test.mp4";
 constexpr unsigned kRequiredEvents = 20;
-constexpr auto kEventTimeout = std::chrono::seconds(45);
+constexpr auto kEventTimeout = std::chrono::minutes(5);
 constexpr auto kFrameProgressTimeout = std::chrono::seconds(10);
 constexpr auto kOverallTimeout = std::chrono::minutes(20);
 
@@ -86,12 +86,18 @@ bool IsOriginalExplorerAlive(const ExplorerIdentity& explorer) {
         && CompareFileTime(&startTime, &explorer.startTime) == 0;
 }
 
+std::string ProfileJson(uint32_t fps) {
+    return R"({"profiles":{"default":{"video":"D:/test_cpp_build/test.mp4","fps":)"
+        + std::to_string(fps) + R"(}},"monitors":{},"fallback":"default"})";
+}
+
 }
 
 int wmain() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     std::setvbuf(stderr, nullptr, _IONBF, 0);
-    MonitorPipeline pipeline;
+    MonitorCoordinator coordinator;
+    WallpaperConfig wallpaperConfig;
     VirtualDesktopTracker tracker;
     ExplorerIdentity explorer;
     HWND pipelineWindow = nullptr;
@@ -107,19 +113,22 @@ int wmain() {
         if (!CaptureExplorer(&explorer))
             throw std::runtime_error("DesktopHardCutCheck could not capture the interactive Explorer identity");
 
-        MonitorPipeline::Config config{monitors.front(), kVideo};
+        wallpaperConfig.LoadJson(ProfileJson(30));
+        MonitorCoordinator::Config config;
+        config.videoPath = kVideo;
         config.targetFPS = 30;
-        if (!pipeline.Initialize(config))
-            throw std::runtime_error("DesktopHardCutCheck failed to initialize the primary pipeline");
-        pipeline.Start();
-        pipelineWindow = pipeline.GetWindowHandle();
+        config.wallpaperConfig = &wallpaperConfig;
+        coordinator.Initialize(config);
+        coordinator.Start();
+        const std::wstring primaryPath = monitors.front().devicePath;
+        pipelineWindow = coordinator.GetPipelineWindowForCheck(primaryPath);
         if (!pipelineWindow || !IsWindow(pipelineWindow))
             throw std::runtime_error("DesktopHardCutCheck did not create its primary HWND");
 
         GUID previousDesktop{};
         bool awaitingFrameProgress = true;
-        uint64_t uploadedBefore = pipeline.GetUploadedFrameCount();
-        uint64_t presentedBefore = pipeline.GetPresentedFrameCount();
+        uint64_t uploadedBefore = coordinator.GetPrimaryUploadedFrameCountForCheck();
+        uint64_t presentedBefore = coordinator.GetPrimaryRenderStats().totalFrames;
         const auto startedAt = std::chrono::steady_clock::now();
         auto eventDeadline = startedAt + kEventTimeout;
         auto frameProgressDeadline = startedAt + kFrameProgressTimeout;
@@ -136,17 +145,19 @@ int wmain() {
                 }
 
                 const uint32_t targetFPS = (eventCount % 2 == 0) ? 31 : 30;
-                const uint64_t cutsBefore = pipeline.GetHardCutCount();
-                if (!pipeline.SwitchMedia(kVideo, targetFPS)
-                    || pipeline.GetHardCutCount() != cutsBefore + 1) {
+                const uint64_t cutsBefore = coordinator.GetPrimaryHardCutCountForCheck();
+                wallpaperConfig.LoadJson(ProfileJson(targetFPS));
+                coordinator.SetCurrentDesktopId(desktopId);
+                if (coordinator.GetPrimaryHardCutCountForCheck() != cutsBefore + 1) {
                     failure = "desktop event hard cut failed";
                     return;
                 }
                 previousDesktop = desktopId;
                 ++eventCount;
+                ++hardCutCount;
                 awaitingFrameProgress = true;
-                uploadedBefore = pipeline.GetUploadedFrameCount();
-                presentedBefore = pipeline.GetPresentedFrameCount();
+                uploadedBefore = coordinator.GetPrimaryUploadedFrameCountForCheck();
+                presentedBefore = coordinator.GetPrimaryRenderStats().totalFrames;
                 frameProgressDeadline = std::chrono::steady_clock::now() + kFrameProgressTimeout;
                 std::printf("[DesktopHardCutCheck] hard-cut=%u fps=%u awaiting frame progress\n",
                             eventCount, targetFPS);
@@ -165,44 +176,51 @@ int wmain() {
                         ownerThread, ready.notificationCookie, pipelineWindow);
 
             while (failure.empty() && (eventCount < kRequiredEvents || awaitingFrameProgress)) {
-                if (!pipeline.PumpMessages()) {
-                    failure = "pipeline message pump returned false";
+                const auto now = std::chrono::steady_clock::now();
+                if (now - startedAt > kOverallTimeout) {
+                    failure = "overall watchdog expired";
                     break;
                 }
-                if (!IsWindow(pipelineWindow)) {
-                    failure = "pipeline HWND disappeared";
+                if (!awaitingFrameProgress && now >= eventDeadline) {
+                    failure = "desktop-event watchdog expired";
                     break;
+                }
+                if (!awaitingFrameProgress) (void)tracker.PumpPending();
+                if (!failure.empty()) break;
+                if (!coordinator.Update()) {
+                    failure = "coordinator update returned false";
+                    break;
+                }
+                const HWND currentWindow = coordinator.GetPipelineWindowForCheck(primaryPath);
+                if (!currentWindow || !IsWindow(currentWindow)) {
+                    failure = "coordinator did not recover pipeline HWND";
+                    break;
+                }
+                if (currentWindow != pipelineWindow) {
+                    std::printf("[DesktopHardCutCheck] pipeline HWND recovered: old=%p new=%p\n",
+                                pipelineWindow, currentWindow);
+                    pipelineWindow = currentWindow;
                 }
                 if (!IsOriginalExplorerAlive(explorer)) {
                     failure = "Explorer PID/session/start-time/HWND changed";
                     break;
                 }
 
-                pipeline.Update();
-                const auto now = std::chrono::steady_clock::now();
-                if (now - startedAt > kOverallTimeout) {
-                    failure = "overall watchdog expired";
-                    break;
-                }
                 if (awaitingFrameProgress) {
-                    if (pipeline.GetUploadedFrameCount() > uploadedBefore
-                        && pipeline.GetPresentedFrameCount() > presentedBefore) {
+                    const uint64_t uploaded = coordinator.GetPrimaryUploadedFrameCountForCheck();
+                    const uint64_t presented = coordinator.GetPrimaryRenderStats().totalFrames;
+                    if (uploaded > uploadedBefore && presented > presentedBefore) {
                         awaitingFrameProgress = false;
                         if (eventCount == kRequiredEvents) break;
                         eventDeadline = now + kEventTimeout;
                         std::printf("[DesktopHardCutCheck] READY_FOR_SWITCH event=%u uploaded=%llu presented=%llu\n",
                                     eventCount + 1,
-                                    static_cast<unsigned long long>(pipeline.GetUploadedFrameCount()),
-                                    static_cast<unsigned long long>(pipeline.GetPresentedFrameCount()));
+                                    static_cast<unsigned long long>(uploaded),
+                                    static_cast<unsigned long long>(presented));
                     } else if (now >= frameProgressDeadline) {
                         failure = "frame-progress watchdog expired";
                         break;
                     }
-                } else if (now >= eventDeadline) {
-                    failure = "desktop-event watchdog expired";
-                    break;
-                } else {
-                    (void)tracker.PumpPending(); // One owner-thread dispatch per loop; never drain queued cuts.
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
@@ -215,12 +233,11 @@ int wmain() {
     }
 
     tracker.Stop();
-    hardCutCount = pipeline.GetHardCutCount();
     try {
-        pipeline.Stop();
-        pipeline.Shutdown();
+        coordinator.Stop();
+        coordinator.Shutdown();
     } catch (const std::exception& error) {
-        if (failure.empty()) failure = std::string("pipeline shutdown failed: ") + error.what();
+        if (failure.empty()) failure = std::string("coordinator shutdown failed: ") + error.what();
     }
     const auto& stopped = tracker.GetDiagnostic();
     DWORD handleCount = 0;

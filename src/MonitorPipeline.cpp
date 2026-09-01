@@ -73,7 +73,17 @@ bool MonitorPipeline::Initialize(const Config& config) {
     m_hardCutCount = 0;
     const auto tryScale = [this](float scale) {
         try { return Build(scale); }
-        catch (...) { TearDownRuntime(); return false; }
+        catch (const std::exception& error) {
+            std::printf("[MonitorPipeline] Build failed at scale %.2f for %ls: %s\n",
+                        scale, m_config.target.devicePath.c_str(), error.what());
+            TearDownRuntime();
+            return false;
+        } catch (...) {
+            std::printf("[MonitorPipeline] Build failed at scale %.2f for %ls: unknown exception\n",
+                        scale, m_config.target.devicePath.c_str());
+            TearDownRuntime();
+            return false;
+        }
     };
 
     if (m_config.target.primary) {
@@ -261,7 +271,10 @@ void MonitorPipeline::Shutdown() {
 }
 
 bool MonitorPipeline::PumpMessages() {
-    return !m_runtime || m_runtime->window.PumpMessages();
+    if (!m_runtime) return true;
+    if (!m_runtime->window.PumpMessages()) return false;
+    if (!m_runtime->window.IsValid() && m_config.onDisplayChange) m_config.onDisplayChange();
+    return true;
 }
 
 bool MonitorPipeline::SignalBudgetChangeForCheck() {
@@ -428,4 +441,8 @@ RECT MonitorPipeline::GetWindowBounds() const noexcept {
 
 HWND MonitorPipeline::GetWindowHandle() const noexcept {
     return m_runtime ? m_runtime->window.GetHwnd() : nullptr;
+}
+
+bool MonitorPipeline::IsWindowHealthy() const noexcept {
+    return m_runtime && m_runtime->window.IsAttachedToCurrentDesktopHost();
 }

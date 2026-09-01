@@ -126,13 +126,21 @@ int wmain() {
         const HWND secondaryWindow = coordinator.GetPipelineWindowForCheck(secondary.devicePath);
         Require(secondaryWindow && IsWindow(secondaryWindow));
 
+        Require(DestroyWindow(preserved));
+        Require(!IsWindow(preserved));
+        Require(coordinator.Reconcile(monitors));
+        const HWND recovered = coordinator.GetPipelineWindowForCheck(primary.devicePath);
+        Require(recovered && recovered != preserved && IsWindow(recovered));
+        Require(coordinator.GetPipelineWindowForCheck(secondary.devicePath) == secondaryWindow);
+        Require(coordinator.Update());
+
         monitors.pop_back();
         Require(coordinator.Reconcile(monitors));
-        Require(coordinator.GetPipelineWindowForCheck(primary.devicePath) == preserved);
+        Require(coordinator.GetPipelineWindowForCheck(primary.devicePath) == recovered);
         Require(!IsWindow(secondaryWindow));
         Require(coordinator.Update());
 
-        const HWND oldRebuildWindow = preserved;
+        const HWND oldRebuildWindow = recovered;
         monitors.front().bounds.right -= 2;
         Require(coordinator.Reconcile(monitors));
         const HWND rebuiltWindow = coordinator.GetPipelineWindowForCheck(primary.devicePath);

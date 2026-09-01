@@ -47,6 +47,8 @@ public:
     void ScheduleDisplayChange() noexcept { m_displayChangePending = true; }
 
     [[nodiscard]] const PresentLoop::Stats GetPrimaryRenderStats() const noexcept;
+    [[nodiscard]] uint64_t GetPrimaryUploadedFrameCountForCheck() const noexcept;
+    [[nodiscard]] uint64_t GetPrimaryHardCutCountForCheck() const noexcept;
     [[nodiscard]] HWND GetPipelineWindowForCheck(const std::wstring& devicePath) const noexcept;
 
 private:

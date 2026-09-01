@@ -280,6 +280,10 @@ endif()
 
 add_executable(DesktopHardCutCheck
     test/DesktopHardCutCheck.cpp
+    src/MonitorCoordinator.cpp
+    src/MonitorCoordinator.h
+    src/WallpaperConfig.cpp
+    src/WallpaperConfig.h
     src/VirtualDesktopTracker.cpp
     src/VirtualDesktopTracker.h
     src/VirtualDesktopInterfaces.h
