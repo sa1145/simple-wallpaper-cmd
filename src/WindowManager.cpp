@@ -406,13 +406,15 @@ void WindowManager::InjectBehindDesktopIcons() {
         throw std::runtime_error("WindowManager::Create — desktop host not found");
     }
 
-    // Force Windows to spawn the WorkerW background window
-    DWORD_PTR ignored = 0;
-    SendMessageTimeoutW(progman, 0x052C, 0x0000000D, 0, SMTO_NORMAL, 1000, &ignored);
-    SendMessageTimeoutW(progman, 0x052C, 0x0000000D, 1, SMTO_NORMAL, 1000, &ignored);
-    SendMessageTimeoutW(progman, 0x052C, 0, 0, SMTO_NORMAL, 1000, &ignored);
-
     HWND desktopHost = FindDesktopHost();
+    if (!desktopHost) {
+        // Force Windows to spawn the WorkerW background window when recovery needs one.
+        DWORD_PTR ignored = 0;
+        SendMessageTimeoutW(progman, 0x052C, 0x0000000D, 0, SMTO_NORMAL, 1000, &ignored);
+        SendMessageTimeoutW(progman, 0x052C, 0x0000000D, 1, SMTO_NORMAL, 1000, &ignored);
+        SendMessageTimeoutW(progman, 0x052C, 0, 0, SMTO_NORMAL, 1000, &ignored);
+        desktopHost = FindDesktopHost();
+    }
     if (!desktopHost) {
         throw std::runtime_error("WindowManager::Create — wallpaper host not found");
     }

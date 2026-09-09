@@ -64,21 +64,27 @@ int main() {
             throw std::runtime_error("No active monitors found");
         }
 
-        const MonitorDescriptor& monitor = monitors.front();
+        const MonitorDescriptor& firstMonitor = monitors.front();
+        const MonitorDescriptor& secondMonitor = monitors.size() > 1 ? monitors[1] : firstMonitor;
         WindowManager first;
-        first.Create(TargetConfig(monitor));
+        first.Create(TargetConfig(firstMonitor));
         WindowManager moved = std::move(first);
         WindowManager second;
-        second.Create(TargetConfig(monitor));
+        second.Create(TargetConfig(secondMonitor));
         WindowManager assigned;
         assigned = std::move(moved);
 
-        CheckTarget(assigned, monitor);
-        CheckTarget(second, monitor);
+        CheckTarget(assigned, firstMonitor);
+        CheckTarget(second, secondMonitor);
+        if (!assigned.IsValid() || !second.IsValid()
+            || !assigned.IsAttachedToCurrentDesktopHost() || !second.IsAttachedToCurrentDesktopHost()
+            || GetParent(assigned.GetHwnd()) != GetParent(second.GetHwnd())) {
+            throw std::runtime_error("WindowManager instances do not share the current desktop host");
+        }
         SendMessageW(assigned.GetHwnd(), WM_DISPLAYCHANGE, 0, 0);
         SendMessageW(second.GetHwnd(), WM_DISPLAYCHANGE, 0, 0);
-        CheckTarget(assigned, monitor);
-        CheckTarget(second, monitor);
+        CheckTarget(assigned, firstMonitor);
+        CheckTarget(second, secondMonitor);
 
         const HWND firstHwnd = assigned.GetHwnd();
         const HWND secondHwnd = second.GetHwnd();
@@ -87,6 +93,8 @@ int main() {
         if (IsWindow(firstHwnd) || IsWindow(secondHwnd)) {
             throw std::runtime_error("WindowManager left a HWND behind");
         }
+        std::cout << (monitors.size() > 1 ? "PASS: two-monitor desktop host stability\n"
+                                          : "PASS: single-monitor desktop host reuse\n");
         return 0;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
