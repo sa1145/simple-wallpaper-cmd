@@ -30,7 +30,7 @@
 ## 使用規範
 
 - 保留使用者的 dirty worktree；不得覆寫無關變更。
-- 除非使用者明確要求，不得 commit、push、reset、清理 build tree 或刪除檔案。
+- 除非使用者明確要求，不得 reset、push、清理 build tree 或刪除檔案。Orchestrator 可在符合 workflow 條件後建立一次本地 commit。
 - 不讀取或重用 `.handoff/failed/`、舊 checkpoint、備份 ZIP，除非使用者明確授權。
 - 優先局部根因修正與既有 native Win32/DX12 機制；不要加入未要求的 abstraction、dependency 或 speculative feature。
 - 不以 build success 代替 runtime success；未執行的驗證必須明確標示。

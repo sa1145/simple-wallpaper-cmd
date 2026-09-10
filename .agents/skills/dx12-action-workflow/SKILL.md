@@ -47,6 +47,15 @@ Do not read `.handoff/failed/`, checkpoints, or backup archives unless the user 
 9. When rework finishes, wake the same Sol reviewer for a new verdict; never reuse a previous verdict.
 10. Count the initial implementation as attempt 1. Stop after five Terra attempts and mark `BLOCKED_RETRY_EXHAUSTED` if the fifth verdict is still `FAIL`.
 
+## Local review commit
+
+- This rule applies only to future Action Items; do not retroactively commit, re-review, or relabel earlier work.
+- When the final implementation for one Action Item changes two or more files, create exactly one local commit after the final Sol `PASS` for the currently authorized scope and the orchestrator's independent acceptance check. One-file or record-only Actions do not get an automatic commit.
+- Between the reviewer's stop and the commit, allow no other edits. Reinspect `git status` and the reviewed diff, then stage only the Action's implementation allowlist. If any reviewed implementation file changed, invalidate the verdict and obtain a fresh review before committing.
+- The commit message records the task ID, final attempt, Sol verdict, and runtime status. The Git commit is the content identity; do not create a separate SHA-256 manifest.
+- Do not include `.handoff`, `doc_handoff`, build outputs, or unrelated user changes in this commit. Never push it automatically, and do not amend or rewrite it while the Action remains open.
+- Terra and Sol never commit. This narrow exception belongs only to the orchestrator and does not authorize commits for ordinary repository work.
+
 ## Implementer constraints
 
 - Read the task and referenced handoff completely before modifying files.
