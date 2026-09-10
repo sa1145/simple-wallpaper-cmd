@@ -1,11 +1,13 @@
 #include "MonitorCoordinator.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cwchar>
 #include <cwctype>
 #include <exception>
 #include <iterator>
 #include <stdexcept>
+#include <thread>
 
 namespace {
 void Require(bool condition) {
@@ -34,6 +36,22 @@ UINT CountEngineWindows() {
     EngineWindowCount count;
     EnumWindows(CountEngineChildren, reinterpret_cast<LPARAM>(&count));
     return count.value;
+}
+
+LONG Width(const RECT& bounds) { return bounds.right - bounds.left; }
+LONG Height(const RECT& bounds) { return bounds.bottom - bounds.top; }
+
+void RequirePipelineTarget(HWND window, const MonitorDescriptor& monitor, HWND desktopHost) {
+    Require(window && IsWindow(window));
+    RECT bounds{};
+    Require(GetWindowRect(window, &bounds));
+    Require(bounds.left == monitor.bounds.left && bounds.top == monitor.bounds.top
+        && bounds.right == monitor.bounds.right && bounds.bottom == monitor.bounds.bottom);
+    const HWND parent = GetParent(window);
+    wchar_t className[64]{};
+    Require(parent && GetClassNameW(parent, className, static_cast<int>(std::size(className)))
+        && wcscmp(className, L"WorkerW") == 0);
+    Require(!desktopHost || parent == desktopHost);
 }
 }
 
@@ -88,8 +106,18 @@ int wmain() {
         Require(fallback.videoPath == L"D:/fallback.mp4" && fallback.fps == 20);
         Require(base.videoPath == L"D:/base.mp4" && base.fps == 60);
 
-        auto monitors = EnumerateActiveMonitors();
-        Require(!monitors.empty());
+        const auto monitors = EnumerateActiveMonitors();
+        Require(monitors.size() == 2);
+        const auto primary = std::find_if(monitors.begin(), monitors.end(),
+            [](const MonitorDescriptor& monitor) { return monitor.primary; });
+        const auto secondary = std::find_if(monitors.begin(), monitors.end(),
+            [](const MonitorDescriptor& monitor) { return !monitor.primary; });
+        Require(primary != monitors.end() && secondary != monitors.end());
+        Require(!primary->devicePath.empty() && !secondary->devicePath.empty());
+        Require(CompareStringOrdinal(primary->devicePath.c_str(), -1,
+                                     secondary->devicePath.c_str(), -1, TRUE) != CSTR_EQUAL);
+        Require(Width(primary->bounds) == 1920 && Height(primary->bounds) == 1080);
+        Require(Width(secondary->bounds) == 2400 && Height(secondary->bounds) == 1080);
 
         MonitorCoordinator coordinator;
         MonitorCoordinator::Config config;
@@ -106,65 +134,84 @@ int wmain() {
         coordinator.Initialize(config);
         coordinator.Start();
 
-        const MonitorDescriptor primary = monitors.front();
-        const HWND preserved = coordinator.GetPipelineWindowForCheck(primary.devicePath);
-        Require(preserved && IsWindow(preserved));
+        const HWND primaryWindow = coordinator.GetPipelineWindowForCheck(primary->devicePath);
+        const HWND secondaryWindow = coordinator.GetPipelineWindowForCheck(secondary->devicePath);
+        RequirePipelineTarget(primaryWindow, *primary, nullptr);
+        const HWND desktopHost = GetParent(primaryWindow);
+        RequirePipelineTarget(secondaryWindow, *secondary, desktopHost);
+        std::printf("[MonitorCoordinatorCheck] two-monitor baseline: primary=%ls %ldx%ld, "
+                    "secondary=%ls %ldx%ld, host=%p\n",
+                    primary->devicePath.c_str(), Width(primary->bounds), Height(primary->bounds),
+                    secondary->devicePath.c_str(), Width(secondary->bounds), Height(secondary->bounds),
+                    desktopHost);
 
-        for (wchar_t& character : monitors.front().devicePath)
-            character = static_cast<wchar_t>(std::towupper(character));
-        monitors.front().gdiDeviceName = L"transient-gdi-name";
-        monitors.front().monitor = reinterpret_cast<HMONITOR>(static_cast<INT_PTR>(1));
-        Require(coordinator.Reconcile(monitors));
-        Require(coordinator.GetPipelineWindowForCheck(primary.devicePath) == preserved);
+        auto transientIdentity = monitors;
+        for (size_t index = 0; index < transientIdentity.size(); ++index) {
+            for (wchar_t& character : transientIdentity[index].devicePath)
+                character = static_cast<wchar_t>(std::towupper(character));
+            transientIdentity[index].gdiDeviceName = L"transient-gdi-name";
+            transientIdentity[index].monitor = reinterpret_cast<HMONITOR>(
+                static_cast<INT_PTR>(index + 1));
+        }
+        Require(coordinator.Reconcile(transientIdentity));
+        Require(coordinator.GetPipelineWindowForCheck(primary->devicePath) == primaryWindow);
+        Require(coordinator.GetPipelineWindowForCheck(secondary->devicePath) == secondaryWindow);
 
-        MonitorDescriptor secondary = primary;
-        secondary.primary = false;
-        secondary.devicePath += L"#MonitorCoordinatorCheck";
-        monitors.push_back(secondary);
-        Require(coordinator.Reconcile(monitors));
-        Require(coordinator.GetPipelineWindowForCheck(primary.devicePath) == preserved);
-        const HWND secondaryWindow = coordinator.GetPipelineWindowForCheck(secondary.devicePath);
-        Require(secondaryWindow && IsWindow(secondaryWindow));
-
-        Require(DestroyWindow(preserved));
-        Require(!IsWindow(preserved));
-        Require(coordinator.Reconcile(monitors));
-        const HWND recovered = coordinator.GetPipelineWindowForCheck(primary.devicePath);
-        Require(recovered && recovered != preserved && IsWindow(recovered));
-        Require(coordinator.GetPipelineWindowForCheck(secondary.devicePath) == secondaryWindow);
-        Require(coordinator.Update());
-
-        monitors.pop_back();
-        Require(coordinator.Reconcile(monitors));
-        Require(coordinator.GetPipelineWindowForCheck(primary.devicePath) == recovered);
+        Require(coordinator.Reconcile({*primary}));
+        Require(coordinator.GetPipelineWindowForCheck(primary->devicePath) == primaryWindow);
         Require(!IsWindow(secondaryWindow));
-        Require(coordinator.Update());
+        Require(coordinator.GetPipelineWindowForCheck(secondary->devicePath) == nullptr);
 
-        const HWND oldRebuildWindow = recovered;
-        monitors.front().bounds.right -= 2;
         Require(coordinator.Reconcile(monitors));
-        const HWND rebuiltWindow = coordinator.GetPipelineWindowForCheck(primary.devicePath);
-        Require(rebuiltWindow && rebuiltWindow != oldRebuildWindow && IsWindow(rebuiltWindow));
-        Require(!IsWindow(oldRebuildWindow));
+        const HWND addedSecondaryWindow = coordinator.GetPipelineWindowForCheck(secondary->devicePath);
+        Require(coordinator.GetPipelineWindowForCheck(primary->devicePath) == primaryWindow);
+        RequirePipelineTarget(addedSecondaryWindow, *secondary, desktopHost);
+
+        auto resizedTopology = monitors;
+        auto resizedSecondary = std::find_if(resizedTopology.begin(), resizedTopology.end(),
+            [](const MonitorDescriptor& monitor) { return !monitor.primary; });
+        Require(resizedSecondary != resizedTopology.end());
+        --resizedSecondary->bounds.right;
+        Require(coordinator.Reconcile(resizedTopology));
+        const HWND resizedSecondaryWindow = coordinator.GetPipelineWindowForCheck(secondary->devicePath);
+        Require(coordinator.GetPipelineWindowForCheck(primary->devicePath) == primaryWindow);
+        Require(resizedSecondaryWindow != addedSecondaryWindow);
+        Require(!IsWindow(addedSecondaryWindow));
+        RequirePipelineTarget(resizedSecondaryWindow, *resizedSecondary, desktopHost);
 
         const UINT windowsBeforeFailure = CountEngineWindows();
-        auto failedTopology = monitors;
-        failedTopology.front().bounds.right -= 2;
-        MonitorDescriptor failedSecondary = failedTopology.front();
-        failedSecondary.primary = false;
-        failedSecondary.devicePath += L"#MonitorCoordinatorCheckFailure";
-        failedTopology.push_back(failedSecondary);
+        auto failedTopology = resizedTopology;
+        const auto failedSecondary = std::find_if(failedTopology.begin(), failedTopology.end(),
+            [](const MonitorDescriptor& monitor) { return !monitor.primary; });
+        Require(failedSecondary != failedTopology.end());
+        --failedSecondary->bounds.right;
         rejectSecondary = true;
         Require(!coordinator.Reconcile(failedTopology));
-        Require(coordinator.GetPipelineWindowForCheck(primary.devicePath) == rebuiltWindow);
-        Require(IsWindow(rebuiltWindow));
-        Require(coordinator.GetPipelineWindowForCheck(failedSecondary.devicePath) == nullptr);
+        rejectSecondary = false;
+        Require(coordinator.GetPipelineWindowForCheck(primary->devicePath) == primaryWindow);
+        Require(coordinator.GetPipelineWindowForCheck(secondary->devicePath) == resizedSecondaryWindow);
+        Require(IsWindow(primaryWindow) && IsWindow(resizedSecondaryWindow));
         Require(CountEngineWindows() == windowsBeforeFailure);
+
+        bool nonOwnerRejected = false;
+        std::thread nonOwner([&] {
+            try {
+                coordinator.Reconcile(resizedTopology);
+            } catch (const std::runtime_error&) {
+                nonOwnerRejected = true;
+            }
+        });
+        nonOwner.join();
+        Require(nonOwnerRejected);
+        Require(coordinator.GetPipelineWindowForCheck(primary->devicePath) == primaryWindow);
+        Require(coordinator.GetPipelineWindowForCheck(secondary->devicePath) == resizedSecondaryWindow);
+        Require(CountEngineWindows() == windowsBeforeFailure);
+        Require(coordinator.Update());
 
         coordinator.Stop();
         coordinator.Shutdown();
-        Require(!IsWindow(rebuiltWindow));
         Require(CountEngineWindows() == 0);
+        std::printf("[MonitorCoordinatorCheck] two-monitor reconciliation PASS\n");
         return 0;
     } catch (const std::exception& error) {
         std::fprintf(stderr, "MonitorCoordinatorCheck failed: %s\\n", error.what());

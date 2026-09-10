@@ -19,13 +19,17 @@
 // ============================================================================
 
 #include "WallpaperEngine.h"
+#include "TrayIcon.h"
 
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <cwchar>
+#include <fcntl.h>
+#include <io.h>
 #include <string>
 #include <windows.h>
+#include <shellapi.h>
 
 // ---------------------------------------------------------------------------
 // Print usage help
@@ -52,13 +56,27 @@ static void PrintUsage(const wchar_t* exeName) {
 // Parse command-line arguments into WallpaperEngine::Config
 // ---------------------------------------------------------------------------
 static bool ParseArgs(int argc, wchar_t* argv[], WallpaperEngine::Config& cfg) {
-    if (argc < 2) {
+    int cliCount = 0;
+    int videoIndex = 0;
+    for (int i = 1; i < argc; ++i) {
+        if (std::wcscmp(argv[i], L"--cli") == 0) {
+            ++cliCount;
+        } else if (videoIndex == 0) {
+            videoIndex = i;
+        }
+    }
+    if (cliCount > 1) {
+        wprintf(L"[Error] --cli may only be specified once\n");
+        PrintUsage(argv[0]);
+        return false;
+    }
+    if (videoIndex == 0) {
         PrintUsage(argv[0]);
         return false;
     }
 
     // First positional argument: video file path
-    cfg.videoPath = argv[1];
+    cfg.videoPath = argv[videoIndex];
 
     // Check for help flag
     if (cfg.videoPath == L"--help" || cfg.videoPath == L"-h" || cfg.videoPath == L"/?") {
@@ -70,9 +88,12 @@ static bool ParseArgs(int argc, wchar_t* argv[], WallpaperEngine::Config& cfg) {
     bool manualWidth  = false;
     bool manualHeight = false;
 
-    for (int i = 2; i < argc; ++i) {
+    for (int i = 1; i < argc; ++i) {
         std::wstring arg = argv[i];
 
+        if (i == videoIndex || arg == L"--cli") {
+            continue;
+        }
         if (arg == L"--fps" && i + 1 < argc) {
             cfg.targetFPS = static_cast<uint32_t>(_wtoi(argv[++i]));
             if (cfg.targetFPS == 0) cfg.targetFPS = 60;
@@ -119,51 +140,106 @@ static bool FileExists(const std::wstring& path) {
     return (attrs != INVALID_FILE_ATTRIBUTES) && !(attrs & FILE_ATTRIBUTE_DIRECTORY);
 }
 
-// ============================================================================
-// wWinMain — Windows GUI entry point (no console window by default)
-//
-// To also support console usage, we use wmain below and set the subsystem
-// to CONSOLE in the build system. If SUBSYSTEM:WINDOWS is used instead,
-// replace wmain with wWinMain.
-// ============================================================================
+static bool IsValidStandardHandle(HANDLE handle) {
+    if (handle == nullptr || handle == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    SetLastError(ERROR_SUCCESS);
+    return GetFileType(handle) != FILE_TYPE_UNKNOWN || GetLastError() == ERROR_SUCCESS;
+}
 
-int wmain(int argc, wchar_t* argv[]) {
-    // Enable UTF-8 console output
+static bool BindStandardStream(HANDLE inherited, FILE* stream) {
+    if (!IsValidStandardHandle(inherited)) {
+        FILE* reopened = nullptr;
+        return freopen_s(&reopened, "CONOUT$", "w", stream) == 0;
+    }
+
+    HANDLE duplicate = nullptr;
+    if (!DuplicateHandle(GetCurrentProcess(), inherited, GetCurrentProcess(), &duplicate,
+                         0, FALSE, DUPLICATE_SAME_ACCESS)) {
+        return false;
+    }
+
+    const int descriptor = _open_osfhandle(reinterpret_cast<intptr_t>(duplicate), _O_WRONLY | _O_TEXT);
+    if (descriptor == -1) {
+        CloseHandle(duplicate);
+        return false;
+    }
+    if (_dup2(descriptor, _fileno(stream)) == -1) {
+        _close(descriptor);
+        return false;
+    }
+    _close(descriptor);
+    clearerr(stream);
+    return true;
+}
+
+static void AttachCliConsole() {
+    const HANDLE inheritedStdout = GetStdHandle(STD_OUTPUT_HANDLE);
+    const HANDLE inheritedStderr = GetStdHandle(STD_ERROR_HANDLE);
+    const bool attached = AttachConsole(ATTACH_PARENT_PROCESS) != FALSE;
+    const DWORD attachError = attached ? ERROR_SUCCESS : GetLastError();
+    const bool stdoutBound = BindStandardStream(
+        IsValidStandardHandle(inheritedStdout) ? inheritedStdout : GetStdHandle(STD_OUTPUT_HANDLE), stdout);
+    const bool stderrBound = BindStandardStream(
+        IsValidStandardHandle(inheritedStderr) ? inheritedStderr : GetStdHandle(STD_ERROR_HANDLE), stderr);
+    if (!attached) {
+        std::fprintf(stderr, "[main] AttachConsole failed: %lu\n", attachError);
+    }
+    if (!stdoutBound || !stderrBound) {
+        std::fprintf(stderr, "[main] Failed to bind CLI output stream\n");
+    }
     SetConsoleOutputCP(CP_UTF8);
     setvbuf(stdout, nullptr, _IONBF, 0);
+    setvbuf(stderr, nullptr, _IONBF, 0);
+}
 
+int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
+    int argc = 0;
+    LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    if (argv == nullptr) {
+        return 1;
+    }
+
+    bool cliRequested = false;
+    for (int i = 1; i < argc; ++i) cliRequested |= std::wcscmp(argv[i], L"--cli") == 0;
+    if (cliRequested) {
+        AttachCliConsole();
+    }
+
+    int exitCode = 0;
     // Parse command-line arguments
     WallpaperEngine::Config cfg;
     if (!ParseArgs(argc, argv, cfg)) {
-        return 1;
+        exitCode = 1;
     }
-
-    // Validate video file
-    if (!FileExists(cfg.videoPath)) {
+    else if (!FileExists(cfg.videoPath)) {
         wprintf(L"[Error] Video file not found: %ls\n", cfg.videoPath.c_str());
-        return 1;
-    }
-
-    // Run the engine
-    WallpaperEngine engine;
-    int exitCode = 0;
-
-    try {
-        engine.Initialize(cfg);
-        engine.Run();
-    }
-    catch (const std::runtime_error& e) {
-        printf("[Fatal Error] %s\n", e.what());
         exitCode = 1;
     }
-    catch (...) {
-        printf("[Fatal Error] Unknown exception\n");
-        exitCode = 1;
-    }
+    else {
+        WallpaperEngine engine;
+        TrayIcon tray;
 
-    // Explicit shutdown (also called by destructor, but being explicit is clearer)
-    engine.Shutdown();
+        try {
+            engine.Initialize(cfg);
+            tray.Initialize(GetModuleHandleW(nullptr), [&engine] { engine.Stop(); });
+            engine.Run();
+        }
+        catch (const std::runtime_error& e) {
+            printf("[Fatal Error] %s\n", e.what());
+            exitCode = 1;
+        }
+        catch (...) {
+            printf("[Fatal Error] Unknown exception\n");
+            exitCode = 1;
+        }
+
+        tray.Shutdown();
+        engine.Shutdown();
+    }
 
     printf("[main] Exit code: %d\n", exitCode);
+    LocalFree(argv);
     return exitCode;
 }

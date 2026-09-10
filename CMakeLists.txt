@@ -49,6 +49,7 @@ set(HEADER_FILES
     src/UploadPipeline.h
     src/PresentLoop.h
     src/WallpaperEngine.h
+    src/TrayIcon.h
 )
 
 set(SOURCE_FILES
@@ -63,6 +64,7 @@ set(SOURCE_FILES
     src/UploadPipeline.cpp
     src/PresentLoop.cpp
     src/WallpaperEngine.cpp
+    src/TrayIcon.cpp
     src/main.cpp
 )
 
@@ -74,10 +76,8 @@ add_executable(${PROJECT_NAME}
     ${HEADER_FILES}
 )
 
-# Console subsystem (wmain entry point)
-# Change to WIN32 if switching to wWinMain
 set_target_properties(${PROJECT_NAME} PROPERTIES
-    WIN32_EXECUTABLE        FALSE
+    WIN32_EXECUTABLE        TRUE
     VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 
@@ -178,7 +178,29 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     propsys.lib
     d3d11.lib
     dwmapi.lib
+    shell32.lib
 )
+
+add_executable(TrayLifecycleCheck
+    test/TrayLifecycleCheck.cpp
+    src/TrayIcon.cpp
+    src/TrayIcon.h
+)
+target_include_directories(TrayLifecycleCheck PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(TrayLifecycleCheck PRIVATE
+    WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
+target_link_libraries(TrayLifecycleCheck PRIVATE user32.lib shell32.lib)
+if(MSVC)
+    target_compile_options(TrayLifecycleCheck PRIVATE /W4 /permissive- /utf-8)
+endif()
+
+add_executable(CliContractCheck test/CliContractCheck.cpp)
+target_compile_definitions(CliContractCheck PRIVATE
+    WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
+target_link_libraries(CliContractCheck PRIVATE user32.lib)
+if(MSVC)
+    target_compile_options(CliContractCheck PRIVATE /W4 /permissive- /utf-8)
+endif()
 
 add_executable(FrameQueueCheck test/FrameQueueCheck.cpp)
 target_include_directories(FrameQueueCheck PRIVATE ${CMAKE_SOURCE_DIR}/src)
